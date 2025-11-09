@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Web Chat — By TOCOLATE</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#9aa4b2;--accent:#60a5fa}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial}
+    body{background:linear-gradient(180deg,#071426 0%,#0b1220 100%);display:flex;align-items:center;justify-content:center;padding:24px;color:#e6eef6}
+    .app{width:100%;max-width:900px;background:var(--card);box-shadow:0 8px 30px rgba(2,6,23,.6);border-radius:12px;overflow:hidden;display:grid;grid-template-columns:1fr 300px}
+    .left{padding:18px;display:flex;flex-direction:column;height:560px}
+    .messages{flex:1;overflow:auto;padding:12px;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-radius:8px}
+    .msg{margin:8px 0;display:flex;gap:10px}
+    .msg.me{justify-content:flex-end}
+    .bubble{max-width:75%;padding:10px 12px;border-radius:10px;background:#0f172a;color:#e6eef6}
+    .bubble.me{background:linear-gradient(90deg,#2563eb,#60a5fa);color:white}
+    .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
+    .composer{display:flex;gap:8px;padding-top:12px}
+    input[type=text]{flex:1;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+    button{background:var(--accent);border:none;padding:10px 14px;border-radius:8px;color:#04243a;font-weight:600;cursor:pointer}
+    .right{padding:18px;border-left:1px solid rgba(255,255,255,0.02)}
+    .small{font-size:13px;color:var(--muted)}
+    .connection{display:flex;gap:8px;align-items:center}
+    .dot{width:10px;height:10px;border-radius:50%}
+    .dot.online{background:#34d399}
+    .dot.offline{background:#ef4444}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="left">
+      <div class="h">Web Chat — By TOCOLATE</div>
+      <div class="small">Tên hiển thị = tên máy thật (hostname)</div>
+
+      <div id="messages" class="messages"></div>
+
+      <div class="composer">
+        <input id="inputMsg" type="text" placeholder="Gõ tin nhắn..." autocomplete="off">
+        <button id="sendBtn">Gửi</button>
+      </div>
+    </div>
+
+    <aside class="right">
+      <div class="small" style="margin-bottom:10px">
+        Trạng thái: <span id="statusText">Đang kết nối...</span>
+      </div>
+      <div class="connection"><div id="dot" class="dot offline"></div> <span id="deviceName"></span></div>
+    </aside>
+  </div>
+
+<script>
+(async () => {
+  const el = id => document.getElementById(id);
+  const messages = el('messages');
+  const input = el('inputMsg');
+  const sendBtn = el('sendBtn');
+  const dot = el('dot');
+  const status = el('statusText');
+  const deviceNameEl = el('deviceName');
+
+  // Lấy hostname từ server
+  let hostname = 'Unknown';
+  try {
+    const res = await fetch('/whoami');
+    const data = await res.json();
+    hostname = data.hostname || 'Unknown';
+  } catch {
+    hostname = 'LocalDevice';
+  }
+  deviceNameEl.textContent = hostname;
+
+  // Kết nối socket.io
+  const socket = io();
+  socket.on('connect', () => {
+    dot.className = 'dot online';
+    status.textContent = 'Online';
+    socket.emit('join', { name: hostname });
+  });
+  socket.on('disconnect', () => {
+    dot.className = 'dot offline';
+    status.textContent = 'Offline';
+  });
+
+  // Nhận tin nhắn
+  socket.on('chat:msg', msg => {
+    const div = document.createElement('div');
+    div.className = 'msg' + (msg.name === hostname ? ' me' : '');
+    div.innerHTML = `<div class="bubble${msg.name === hostname ? ' me' : ''}">
+      <div class="meta">${msg.name} · ${new Date(msg.ts).toLocaleTimeString()}</div>
+      <div>${msg.text}</div></div>`;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+  });
+
+  // Gửi tin nhắn
+  function send() {
+    const text = input.value.trim();
+    if (!text) return;
+    socket.emit('chat:msg', { name: hostname, text, ts: Date.now() });
+    input.value = '';
+  }
+
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+  sendBtn.addEventListener('click', send);
+})();
+</script>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+(async () => {
+  const el = id => document.getElementById(id);
+  const messages = el('messages');
+  const input = el('inputMsg');
+  const sendBtn = el('sendBtn');
+  const dot = el('dot');
+  const status = el('statusText');
+  const deviceNameEl = el('deviceName');
+
+  // Lấy tên máy
+  let hostname = 'Unknown';
+  try {
+    const res = await fetch('/whoami');
+    const data = await res.json();
+    hostname = data.hostname || 'Unknown';
+  } catch {
+    hostname = 'LocalDevice';
+  }
+  deviceNameEl.textContent = hostname;
+
+  // Kết nối socket
+  const socket = io();
+
+  socket.on('connect', () => {
+    dot.className = 'dot online';
+    status.textContent = 'Online';
+    socket.emit('join', { name: hostname });
+  });
+
+  socket.on('disconnect', () => {
+    dot.className = 'dot offline';
+    status.textContent = 'Offline';
+  });
+
+  // Nhận lịch sử chat
+  socket.on('chat:history', history => {
+    history.forEach(showMessage);
+  });
+
+  // Nhận tin nhắn mới
+  socket.on('chat:msg', showMessage);
+
+  function showMessage(msg) {
+    const div = document.createElement('div');
+    div.className = 'msg' + (msg.name === hostname ? ' me' : '');
+    div.innerHTML = `<div class="bubble${msg.name === hostname ? ' me' : ''}">
+      <div class="meta">${msg.name} · ${new Date(msg.ts).toLocaleTimeString()}</div>
+      <div>${msg.text}</div></div>`;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  // Gửi tin nhắn
+  function send() {
+    const text = input.value.trim();
+    if (!text) return;
+    socket.emit('chat:msg', { name: hostname, text, ts: Date.now() });
+    input.value = '';
+  }
+
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+  sendBtn.addEventListener('click', send);
+})();
+</script>
+</body>
+</html>
