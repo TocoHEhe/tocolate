@@ -1,14 +1,24 @@
+<!--
+Single-file chat frontend (index.html) that shows the client's 'device name' when sending messages.
+It tries to GET /whoami (Node server example provided below). If that endpoint exists it will use the OS hostname returned by the server.
+If there's no server, it falls back to a local device name derived from navigator.userAgent so no login is required.
+
+Also included below is an optional Node.js server (server.js) using Express + socket.io that provides /whoami and real-time chat.
+
+Save this file as index.html. If you want multi-user across network, also create server.js (snippet at the bottom) and run it.
+-->
+
 <!doctype html>
 <html lang="vi">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Web Chat — By TOCOLATE</title>
+  <title>Web Chat không cần đăng nhập — Hiển thị tên máy</title>
   <style>
     :root{--bg:#0f1724;--card:#0b1220;--muted:#9aa4b2;--accent:#60a5fa}
     html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial}
     body{background:linear-gradient(180deg,#071426 0%,#0b1220 100%);display:flex;align-items:center;justify-content:center;padding:24px;color:#e6eef6}
-    .app{width:100%;max-width:900px;background:var(--card);box-shadow:0 8px 30px rgba(2,6,23,.6);border-radius:12px;overflow:hidden;display:grid;grid-template-columns:1fr 300px}
+    .app{width:100%;max-width:900px;background:var(--card);box-shadow:0 8px 30px rgba(2,6,23,.6);border-radius:12px;overflow:hidden;display:grid;grid-template-columns:1fr 360px}
     .left{padding:18px;display:flex;flex-direction:column;height:560px}
     .messages{flex:1;overflow:auto;padding:12px;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-radius:8px}
     .msg{margin:8px 0;display:flex;gap:10px}
@@ -20,92 +30,266 @@
     input[type=text]{flex:1;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
     button{background:var(--accent);border:none;padding:10px 14px;border-radius:8px;color:#04243a;font-weight:600;cursor:pointer}
     .right{padding:18px;border-left:1px solid rgba(255,255,255,0.02)}
+    .section{margin-bottom:14px}
+    .h{font-weight:600;margin-bottom:8px}
     .small{font-size:13px;color:var(--muted)}
     .connection{display:flex;gap:8px;align-items:center}
     .dot{width:10px;height:10px;border-radius:50%}
     .dot.online{background:#34d399}
     .dot.offline{background:#ef4444}
+    .name-edit{display:flex;gap:8px;margin-top:8px}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted);padding:8px;border-radius:8px}
+    footer{font-size:12px;color:var(--muted);text-align:center;padding:10px}
   </style>
 </head>
 <body>
-  <div class="app">
+  <div class="app" role="application">
     <div class="left">
-      <div class="h">Web Chat — By TOCOLATE</div>
-      <div class="small">Tên hiển thị = tên máy thật (hostname)</div>
+      <div class="h">Web Chat (Không cần đăng nhập)</div>
+      <div class="small">Tên hiển thị = tên máy (nếu server cung cấp) hoặc tên thiết bị tạm thời.</div>
 
-      <div id="messages" class="messages"></div>
+      <div id="messages" class="messages" aria-live="polite"></div>
 
       <div class="composer">
-        <input id="inputMsg" type="text" placeholder="Gõ tin nhắn..." autocomplete="off">
+        <input id="inputMsg" type="text" placeholder="Gõ tin nhắn rồi Enter hoặc nhấn Gửi..." autocomplete="off">
         <button id="sendBtn">Gửi</button>
       </div>
     </div>
 
     <aside class="right">
-      <div class="small" style="margin-bottom:10px">
-        Trạng thái: <span id="statusText">Đang kết nối...</span>
+      <div class="section">
+        <div class="h">Trạng thái kết nối</div>
+        <div class="connection"><div id="dot" class="dot offline"></div><div id="statusText">Offline</div></div>
       </div>
-      <div class="connection"><div id="dot" class="dot offline"></div> <span id="deviceName"></span></div>
+
+      <div class="section">
+        <div class="h">Tên hiển thị</div>
+        <div id="deviceName" class="small">...</div>
+        <div class="name-edit">
+          <input id="editName" type="text" placeholder="Sửa tên hiển thị" style="flex:1;padding:8px;border-radius:6px;background:transparent;border:1px solid rgba(255,255,255,0.04);color:inherit">
+          <button id="saveName" class="btn-ghost">Lưu</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="h">Cài đặt</div>
+        <div class="small">Chế độ: <span id="modeLabel">Local-only</span></div>
+        <div style="margin-top:8px"><button id="clearBtn" class="btn-ghost">Xóa lịch sử chat</button></div>
+      </div>
+
+      <div style="flex:1"></div>
+      <footer>Chạy với chế độ đa người: bật server Node.js (xem hướng dẫn trong file)</footer>
     </aside>
   </div>
 
 <script>
-(async () => {
+(() => {
+  // Helpers
   const el = id => document.getElementById(id);
-  const messages = el('messages');
+  const messagesEl = el('messages');
   const input = el('inputMsg');
   const sendBtn = el('sendBtn');
-  const dot = el('dot');
-  const status = el('statusText');
   const deviceNameEl = el('deviceName');
+  const editName = el('editName');
+  const saveName = el('saveName');
+  const dot = el('dot');
+  const statusText = el('statusText');
+  const modeLabel = el('modeLabel');
+  const clearBtn = el('clearBtn');
 
-  // Lấy hostname từ server
-  let hostname = 'Unknown';
-  try {
-    const res = await fetch('/whoami');
-    const data = await res.json();
-    hostname = data.hostname || 'Unknown';
-  } catch {
-    hostname = 'LocalDevice';
-  }
-  deviceNameEl.textContent = hostname;
+  // Local storage keys
+  const LS_NAME = 'chat_device_name_v1';
+  const LS_MSGS = 'chat_messages_v1';
 
-  // Kết nối socket.io
-  const socket = io();
-  socket.on('connect', () => {
-    dot.className = 'dot online';
-    status.textContent = 'Online';
-    socket.emit('join', { name: hostname });
-  });
-  socket.on('disconnect', () => {
-    dot.className = 'dot offline';
-    status.textContent = 'Offline';
-  });
+  // State
+  let deviceName = localStorage.getItem(LS_NAME) || '';
+  let socket = null;
+  let connected = false;
 
-  // Nhận tin nhắn
-  socket.on('chat:msg', msg => {
+  function addMessage({name, text, ts, me=false}){
     const div = document.createElement('div');
-    div.className = 'msg' + (msg.name === hostname ? ' me' : '');
-    div.innerHTML = `<div class="bubble${msg.name === hostname ? ' me' : ''}">
-      <div class="meta">${msg.name} · ${new Date(msg.ts).toLocaleTimeString()}</div>
-      <div>${msg.text}</div></div>`;
-    messages.appendChild(div);
-    messages.scrollTop = messages.scrollHeight;
-  });
+    div.className = 'msg' + (me ? ' me' : '');
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble' + (me ? ' me' : '');
 
-  // Gửi tin nhắn
-  function send() {
-    const text = input.value.trim();
-    if (!text) return;
-    socket.emit('chat:msg', { name: hostname, text, ts: Date.now() });
-    input.value = '';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const t = new Date(ts||Date.now());
+    meta.textContent = name + ' · ' + t.toLocaleTimeString();
+
+    const body = document.createElement('div');
+    body.textContent = text;
+
+    bubble.appendChild(meta);
+    bubble.appendChild(body);
+    div.appendChild(bubble);
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+  function saveMessagesLocal(msgs){
+    try{localStorage.setItem(LS_MSGS, JSON.stringify(msgs));}catch(e){}
+  }
+  function loadMessagesLocal(){
+    try{return JSON.parse(localStorage.getItem(LS_MSGS) || '[]');}catch(e){return []}
+  }
+
+  // Try to fetch server-provided hostname
+  async function tryWhoami(){
+    try{
+      const res = await fetch('/whoami', {cache:'no-store'});
+      if(!res.ok) throw new Error('no');
+      const data = await res.json();
+      if(data && data.hostname){
+        return data.hostname;
+      }
+    }catch(e){/* ignore */}
+    return null;
+  }
+
+  // Fallback device name generator
+  function makeFallbackName(){
+    const ua = navigator.userAgent || navigator.platform || 'device';
+    // hash a little
+    let h=0; for(let i=0;i<ua.length;i++){h=(h<<5)-h+ua.charCodeAt(i);h|=0}
+    const short = Math.abs(h).toString(36).slice(0,6);
+    return 'Device-'+short;
+  }
+
+  // Init
+  (async function init(){
+    // load saved name
+    if(!deviceName) deviceName = localStorage.getItem(LS_NAME) || '';
+
+    // try server
+    const serverName = await tryWhoami();
+    if(serverName){
+      deviceName = serverName;
+      modeLabel.textContent = 'Connected to server (hostname provided)';
+    } else if(!deviceName){
+      deviceName = makeFallbackName();
+      modeLabel.textContent = 'Local-only (no server)';
+    }
+
+    deviceNameEl.textContent = deviceName;
+    editName.value = deviceName;
+
+    // load local messages
+    const saved = loadMessagesLocal();
+    for(const m of saved) addMessage(m);
+
+    // try to init socket.io (optional server). If socket.io not present or server not running, skip.
+    try{
+      // dynamic load of socket.io client
+      await loadScript('https://cdn.socket.io/4.7.2/socket.io.min.js');
+      socket = io(); // connects to same origin
+      socket.on('connect', ()=>{
+        connected = true; dot.className='dot online'; statusText.textContent='Online'; modeLabel.textContent='Live (server)';
+        // announce presence
+        socket.emit('join', {name:deviceName});
+      });
+      socket.on('disconnect', ()=>{connected=false; dot.className='dot offline'; statusText.textContent='Offline'; modeLabel.textContent='Local-only';});
+      socket.on('chat:msg', (m)=>{
+        // if the message comes from this socket id, mark as me
+        const me = (m.id && socket.id && m.id === socket.id);
+        addMessage({name:m.name,text:m.text,ts:m.ts,me:me});
+        // store
+        const all = loadMessagesLocal(); all.push({name:m.name,text:m.text,ts:m.ts}); saveMessagesLocal(all);
+      });
+    }catch(e){
+      // no socket.io or server unreachable
+      dot.className='dot offline'; statusText.textContent='Offline';
+    }
+  })();
+
+  // send
+  function send(){
+    const text = input.value.trim();
+    if(!text) return;
+    const msg = {name: deviceName, text, ts:Date.now()};
+
+    if(socket && connected){
+      socket.emit('chat:msg', msg);
+      // server will broadcast back, so don't double-add here (but it's OK if delayed)
+    } else {
+      // local-only: show immediately
+      addMessage({...msg,me:true});
+      const all = loadMessagesLocal(); all.push(msg); saveMessagesLocal(all);
+    }
+
+    input.value=''; input.focus();
+  }
+
+  input.addEventListener('keydown', e=>{ if(e.key==='Enter') send(); });
   sendBtn.addEventListener('click', send);
+
+  saveName.addEventListener('click', ()=>{
+    const v = editName.value.trim(); if(!v) return; deviceName=v; localStorage.setItem(LS_NAME, v); deviceNameEl.textContent=v;
+    // if socket connected, send update
+    if(socket && connected) socket.emit('rename', {name:v});
+  });
+
+  clearBtn.addEventListener('click', ()=>{localStorage.removeItem(LS_MSGS); messagesEl.innerHTML='';});
+
+  function loadScript(src){
+    return new Promise((resolve,reject)=>{
+      const s = document.createElement('script'); s.src=src; s.onload=resolve; s.onerror=reject; document.head.appendChild(s);
+    });
+  }
+
 })();
 </script>
 
+<!-- Optional Node.js server (server.js)
+
+Save as server.js. Run:
+  npm init -y
+  npm install express socket.io
+  node server.js
+
+This server serves index.html and provides /whoami (returns OS hostname) and socket.io real-time chat.
+
+*/
+/* ===== server.js ===== */
+/*
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const os = require('os');
+const path = require('path');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+// serve this index.html (place it in the same folder)
+app.use(express.static(path.join(__dirname)));
+
+app.get('/whoami', (req, res) => {
+  res.json({ hostname: os.hostname() });
+});
+
+io.on('connection', (socket) => {
+  console.log('client connected', socket.id);
+  socket.on('join', (data) => {
+    console.log('join', data);
+  });
+  socket.on('rename', (data) => {
+    // optionally handle rename
+    console.log('rename', data);
+  });
+  socket.on('chat:msg', (m) => {
+    // attach sender id and ts
+    const msg = { ...m, id: socket.id, ts: Date.now() };
+    io.emit('chat:msg', msg);
+  });
+
+  socket.on('disconnect', ()=> console.log('disconnect', socket.id));
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log('Server running on', PORT));
+*/
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
 (async () => {
